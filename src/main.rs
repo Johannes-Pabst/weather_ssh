@@ -1,7 +1,10 @@
 pub mod frame;
 pub mod messages;
+pub mod vec3;
 
+use std::mem;
 use std::net::IpAddr;
+use std::ops::{Add, Mul, Neg, Sub};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -18,6 +21,7 @@ use tokio::time::{Instant, sleep};
 
 use crate::frame::{Frame, read_term_data};
 use crate::messages::generate_message;
+use crate::vec3::Vec3;
 
 #[tokio::main]
 async fn main() {
@@ -317,6 +321,26 @@ struct Particle{
     y:f64,
     z:f64,
 }
+struct Triangle{
+    p:[Vec3;3],
+}
+impl Triangle{
+    pub fn area(&self)->f64{
+        (self.p[0]-self.p[1]).cross(&(self.p[0]-self.p[2])).len()
+    }
+    pub fn random_point(&self, rng:&mut SmallRng)->Vec3{
+        let mut xn=rng.random();
+        let mut yn=rng.random();
+        if xn+yn>1.0{
+            xn=0.5-xn;
+            yn=0.5-yn;
+        }
+        self.p[0]+(self.p[1]-self.p[0])*xn+(self.p[2]-self.p[0])*yn
+    }
+    pub fn normal(&self)->Vec3{
+        (self.p[0]-self.p[1]).cross(&(self.p[0]-self.p[2])).normalize()
+    }
+}
 async fn weather(session: Handle, channel: ChannelId, data: Arc<Mutex<PtyData>>, username: &str, ip:IpAddr) -> Result<(), CryptoVec>{
     let fd=read_term_data();
     let d0=data.lock().await;
@@ -334,6 +358,7 @@ async fn weather(session: Handle, channel: ChannelId, data: Arc<Mutex<PtyData>>,
     calculate camera edge planes
     for each camera edge plane:
     calculate area
+    the more area, the more random points are checked and have a chance to generate a snowflake if the wind's strong enough.
     area * normal dot movement = amount of snowflakes to spawn in this area
     wind
     ripples
@@ -351,11 +376,88 @@ async fn weather(session: Handle, channel: ChannelId, data: Arc<Mutex<PtyData>>,
         t+=1.0;
         let horizon_height=f.height as f64*0.3;
         let y3d=5.0;
+        let cam_origin=Vec3::new(0.0,0.0,0.0);
+        let see_distance=5.0;
+        let camplanez=1.0;
+        let camdir_top_left=Vec3::new(-(f.width as f64 / f.height as f64), -1.0, camplanez);
+        let camdir_top_right=Vec3::new(-camdir_top_left.c[0], camdir_top_left.c[1], camdir_top_left.c[2]);
+        let camdir_bottom_left=Vec3::new(camdir_top_left.c[0], -camdir_top_left.c[1], camdir_top_left.c[2]);
+        let camdir_bottom_right=Vec3::new(-camdir_top_left.c[0], -camdir_top_left.c[1], camdir_top_left.c[2]);
+        let camdir_down=camdir_bottom_left-camdir_top_left;
+        let camdir_right=camdir_bottom_right-camdir_bottom_left;
+        let cam_top_left=camdir_top_left/camplanez*see_distance;
+        let cam_top_right=camdir_top_right/camplanez*see_distance;
+        let mut cam_bottom_left_far=camdir_bottom_left/camplanez*see_distance;
+        cam_bottom_left_far.c[1]=y3d;
+        let mut cam_bottom_right_far=camdir_bottom_right/camplanez*see_distance;
+        cam_bottom_right_far.c[1]=y3d;
+        let cam_bottom_left_near=Vec3::new(camdir_bottom_left.c[0]*y3d/camdir_bottom_left.c[2], y3d, camdir_bottom_left.c[1]*y3d/camdir_bottom_left.c[2]);
+        let cam_bottom_right_near=Vec3::new(camdir_bottom_right.c[0]*y3d/camdir_bottom_right.c[2], y3d, camdir_bottom_right.c[1]*y3d/camdir_bottom_right.c[2]);
+        let snow_spawners=&[
+            Triangle{// top
+                p:[
+                    cam_origin,
+                    cam_top_left,
+                    cam_top_right,
+                ]
+            },
+            Triangle{// bottom
+                p:[
+                    cam_origin,
+                    cam_bottom_right_near,
+                    cam_bottom_left_near,
+                ]
+            },
+            Triangle{// left near
+                p:[
+                    cam_origin,
+                    cam_bottom_left_near,
+                    cam_top_left,
+                ]
+            },
+            Triangle{// left far
+                p:[
+                    cam_bottom_left_near,
+                    cam_bottom_left_far,
+                    cam_top_left,
+                ]
+            },
+            Triangle{// right near
+                p:[
+                    cam_origin,
+                    cam_top_right,
+                    cam_bottom_right_near,
+                ]
+            },
+            Triangle{// right far
+                p:[
+                    cam_bottom_right_near,
+                    cam_top_right,
+                    cam_bottom_right_far,
+                ]
+            },
+            Triangle{// far top left
+                p:[
+                    cam_top_left,
+                    cam_bottom_left_far,
+                    cam_top_right,
+                ]
+            },
+            Triangle{// far bottom right
+                p:[
+                    cam_bottom_right_far,
+                    cam_top_right,
+                    cam_bottom_left_far,
+                ]
+            },
+        ];
         for y in 0..f.height{
             for x in 0..f.width{
                 if y as f64 > horizon_height{
-                    let z3d=f.width as f64/(y as f64-horizon_height) * y3d;
-                    let x3d=(x as f64-f.width as f64/2.0) /(y as f64-horizon_height) * y3d;
+                    let lookdir=camdir_top_left+camdir_right*(x as f64 / f.width as f64)+camdir_down*(y as f64 / f.height as f64);
+
+                    let z3d=lookdir.c[2]/lookdir.c[1] * y3d;
+                    let x3d=lookdir.c[0]/lookdir.c[1] * y3d;
                     let quantum_y3d=noise.get([x3d/30.0, z3d/30.0]);
                     if quantum_y3d>0.4{
                         f.set_texel(x, y, ('q', ())).unwrap();
@@ -367,7 +469,25 @@ async fn weather(session: Handle, channel: ChannelId, data: Arc<Mutex<PtyData>>,
                 }
             }
         }
-        particles.push(Particle { x: rng.random_range(-10.0..10.0), y: -3.0, z: rng.random_range(0.0..7.0) });
+        let snow_amount=0.001;
+        for tr in snow_spawners{
+            let tries=snow_amount*tr.area();
+            let prob_plus_1=tries%1.0;
+            let tries=if rng.random::<f64>()<prob_plus_1{
+                tries.ceil() as usize
+            }else{
+                tries.floor() as usize
+            };
+            let normal=tr.normal();
+            for _ in 0..tries{
+                let point=tr.random_point(&mut rng);
+                let wind=get_wind(noise, t, windx, windz, &point);
+                let prob=wind.dot(&normal);
+                if rng.random::<f64>()< prob{
+                    particles.push(Particle { x: point.c[0], y: point.c[1], z: point.c[2] });
+                }
+            }
+        }
         {
             let f=&mut f;
             let td=&fd;
@@ -375,18 +495,17 @@ async fn weather(session: Handle, channel: ChannelId, data: Arc<Mutex<PtyData>>,
                 p.y+=0.03;
                 p.x+=windx;
                 p.z+=windz;
-                let curl=curl_noise_3d_t(&noise, (p.x-windx*t)/10.0, p.y/10.0, (p.z-windz*t)/10.0, t*0.003);
-                p.x+=curl[0]/100.0;
-                p.y+=curl[1]/100.0;
-                p.z+=curl[2]/100.0;
+                let pvec = Vec3::new(p.x,p.y,p.z);
+                let curl = get_wind(noise, t, windx, windz, &pvec);
+                p.x+=curl.c[0]/100.0;
+                p.y+=curl.c[1]/100.0;
+                p.z+=curl.c[2]/100.0;
                 if p.y<y3d&&p.z>0.0{
-                    let sx=p.x/p.z*f.height as f64/2.0+f.width as f64 / 2.0;
-                    let sy=p.y/p.z*f.height as f64/2.0+horizon_height;
-                    if sx>0.0&&sy>0.0{
-                        let sx2=sx as usize;
-                        let sy2=sy as usize;
-                        // let _=f.set_texel(sx2, sy2, ('*',()));
-                        let _=f.set_pixel(sx2, sy2, (1000.0/p.z/p.z) as u8, (1000.0/p.z/p.z) as u8, (1000.0/p.z/p.z) as u8, td);
+                    let lcomb=(camdir_top_left- pvec).lin_comb(-camdir_right, -camdir_down, cam_origin-pvec);
+                    if lcomb.c[0]>0.0&&lcomb.c[0]<1.0&&lcomb.c[1]>0.0&&lcomb.c[1]<1.0{
+                        let sx=(lcomb.c[0]*f.width as f64) as usize;
+                        let sy=(lcomb.c[1]*f.height as f64) as usize;
+                        let _=f.set_pixel(sx, sy, (1000.0/p.z/p.z) as u8, (1000.0/p.z/p.z) as u8, (1000.0/p.z/p.z) as u8, td);
                     }
                     Some(p)
                 }else{
@@ -403,11 +522,15 @@ async fn weather(session: Handle, channel: ChannelId, data: Arc<Mutex<PtyData>>,
         sleep(Duration::from_millis(30)).await;
     }
 }
-pub fn curl_noise_3d_t(noise:&Simplex, x:f64, y:f64, z:f64, t:f64)->[f64;3]{
+
+fn get_wind(noise: Simplex, t: f64, windx: f64, windz: f64, p: &Vec3) -> Vec3 {
+    curl_noise_3d_t(&noise, (p.c[0]-windx*t)/10.0, p.c[1]/10.0, (p.c[2]-windz*t)/10.0, t*0.003)
+}
+pub fn curl_noise_3d_t(noise:&Simplex, x:f64, y:f64, z:f64, t:f64)->Vec3{
     const D:f64=0.001;
-    [
+    Vec3::new(
         (noise.get([x, y+D, z, t+2000.0])-noise.get([x, y-D, z, t+2000.0]))/2.0/D-(noise.get([x, y, z+D, t+1000.0])-noise.get([x, y, z-D, t+1000.0]))/2.0/D,
         (noise.get([x, y, z+D, t])-noise.get([x, y, z-D, t]))/2.0/D-(noise.get([x+D, y, z, t+2000.0])-noise.get([x-D, y, z, t+2000.0]))/2.0/D,
         (noise.get([x+D, y, z, t+1000.0])-noise.get([x-D, y, z, t+1000.0]))/2.0/D-(noise.get([x, y+D, z, t])-noise.get([x, y-D, z, t]))/2.0/D,
-    ]
+    )
 }
