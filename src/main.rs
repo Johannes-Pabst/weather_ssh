@@ -377,7 +377,7 @@ async fn weather(session: Handle, channel: ChannelId, data: Arc<Mutex<PtyData>>,
         let horizon_height=f.height as f64*0.3;
         let y3d=5.0;
         let cam_origin=Vec3::new(0.0,0.0,0.0);
-        let see_distance=5.0;
+        let see_distance=10.0;
         let camplanez=1.0;
         let camdir_top_left=Vec3::new(-(f.width as f64 / f.height as f64), -1.0, camplanez);
         let camdir_top_right=Vec3::new(-camdir_top_left.c[0], camdir_top_left.c[1], camdir_top_left.c[2]);
@@ -469,7 +469,7 @@ async fn weather(session: Handle, channel: ChannelId, data: Arc<Mutex<PtyData>>,
                 }
             }
         }
-        let snow_amount=0.001;
+        let snow_amount=0.0001*f.height as f64;
         for tr in snow_spawners{
             let tries=snow_amount*tr.area();
             let prob_plus_1=tries%1.0;
@@ -519,7 +519,7 @@ async fn weather(session: Handle, channel: ChannelId, data: Arc<Mutex<PtyData>>,
                 CryptoVec::from(f.render_str()),
             )
             .await?;
-        sleep(Duration::from_millis(30)).await;
+        sleep(Duration::from_millis(15)).await;
     }
 }
 
