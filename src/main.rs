@@ -372,8 +372,9 @@ async fn weather(session: Handle, channel: ChannelId, data: Arc<Mutex<PtyData>>,
     let mut t=0.0;
     let windx=0.02;
     let windz=-0.02;
+    let tmult=5.0;
     loop {
-        t+=1.0;
+        t+=1.0*tmult;
         let horizon_height=f.height as f64*0.3;
         let y3d=5.0;
         let cam_origin=Vec3::new(0.0,0.0,0.0);
@@ -459,7 +460,7 @@ async fn weather(session: Handle, channel: ChannelId, data: Arc<Mutex<PtyData>>,
                     let z3d=lookdir.c[2]/lookdir.c[1] * y3d;
                     let x3d=lookdir.c[0]/lookdir.c[1] * y3d;
                     let quantum_y3d=noise.get([x3d/30.0, z3d/30.0]);
-                    if quantum_y3d>0.4{
+                    if quantum_y3d>0.4&&z3d>0.0{
                         f.set_texel(x, y, ('q', ())).unwrap();
                     }else{
                         f.set_texel(x, y, (' ', ())).unwrap();
@@ -471,7 +472,7 @@ async fn weather(session: Handle, channel: ChannelId, data: Arc<Mutex<PtyData>>,
         }
         let snow_amount=0.0001*f.height as f64;
         for tr in snow_spawners{
-            let tries=snow_amount*tr.area();
+            let tries=snow_amount*tr.area()*tmult;
             let prob_plus_1=tries%1.0;
             let tries=if rng.random::<f64>()<prob_plus_1{
                 tries.ceil() as usize
@@ -492,20 +493,20 @@ async fn weather(session: Handle, channel: ChannelId, data: Arc<Mutex<PtyData>>,
             let f=&mut f;
             let td=&fd;
             particles=particles.drain(..).filter_map(move |mut p| {
-                p.y+=0.03;
-                p.x+=windx;
-                p.z+=windz;
+                p.y+=0.03*tmult;
+                p.x+=windx*tmult;
+                p.z+=windz*tmult;
                 let pvec = Vec3::new(p.x,p.y,p.z);
                 let curl = get_wind(noise, t, windx, windz, &pvec);
-                p.x+=curl.c[0]/100.0;
-                p.y+=curl.c[1]/100.0;
-                p.z+=curl.c[2]/100.0;
+                p.x+=curl.c[0]/100.0*tmult;
+                p.y+=curl.c[1]/100.0*tmult;
+                p.z+=curl.c[2]/100.0*tmult;
                 if p.y<y3d&&p.z>0.0{
                     let lcomb=(camdir_top_left- pvec).lin_comb(-camdir_right, -camdir_down, cam_origin-pvec);
                     if lcomb.c[0]>0.0&&lcomb.c[0]<1.0&&lcomb.c[1]>0.0&&lcomb.c[1]<1.0{
                         let sx=(lcomb.c[0]*f.width as f64) as usize;
                         let sy=(lcomb.c[1]*f.height as f64) as usize;
-                        let _=f.set_pixel(sx, sy, (1000.0/p.z/p.z) as u8, (1000.0/p.z/p.z) as u8, (1000.0/p.z/p.z) as u8, td);
+                        let _=f.set_pixel(sx, sy, (2000.0/p.z/p.z) as u8, (2000.0/p.z/p.z) as u8, (2000.0/p.z/p.z) as u8, td);
                     }
                     Some(p)
                 }else{
@@ -519,7 +520,7 @@ async fn weather(session: Handle, channel: ChannelId, data: Arc<Mutex<PtyData>>,
                 CryptoVec::from(f.render_str()),
             )
             .await?;
-        sleep(Duration::from_millis(15)).await;
+        sleep(Duration::from_millis(30)).await;
     }
 }
 
